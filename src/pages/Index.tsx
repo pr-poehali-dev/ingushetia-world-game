@@ -187,45 +187,184 @@ const Index = () => {
     buildRoad(c('Чермен'), c('Владикавказ'));
     buildRoad(c('Назрань'), c('Карабулак'));
 
-    // ===== Города (здания + табличка-флажок) =====
-    const flags: { name: string; mesh: THREE.Mesh; x: number; z: number }[] = [];
-    CITIES.forEach((city) => {
-      // дома вокруг центра города
-      for (let i = 0; i < 12; i++) {
-        const w = 6 + Math.random() * 6;
-        const hh = 8 + Math.random() * 24;
-        const d = 6 + Math.random() * 6;
-        const hue = city.region === 'osetia' ? 0xd9c7a8 : 0xc9b89a;
-        const b = new THREE.Mesh(
-          new THREE.BoxGeometry(w, hh, d),
-          new THREE.MeshStandardMaterial({ color: hue, roughness: 0.95 })
-        );
-        const ang = Math.random() * Math.PI * 2;
-        const rad = 12 + Math.random() * 30;
-        b.position.set(city.x + Math.cos(ang) * rad, hh / 2, city.z + Math.sin(ang) * rad);
-        b.castShadow = true;
-        b.receiveShadow = true;
-        scene.add(b);
-        // крыша
-        const roof = new THREE.Mesh(
-          new THREE.ConeGeometry(w * 0.8, 5, 4),
-          new THREE.MeshStandardMaterial({ color: 0x8b3a2f })
-        );
-        roof.position.set(b.position.x, hh + 2.5, b.position.z);
-        roof.rotation.y = Math.PI / 4;
-        scene.add(roof);
+    // ===== Детальный город: текстура окон на фасадах =====
+    // Создаём процедурную текстуру окон через canvas (реалистичные фасады)
+    function makeWindowTexture(lit: boolean) {
+      const cv = document.createElement('canvas');
+      cv.width = 64; cv.height = 128;
+      const g = cv.getContext('2d')!;
+      g.fillStyle = lit ? '#3a3f4a' : '#5a6270'; // стена
+      g.fillRect(0, 0, 64, 128);
+      // ряды окон
+      for (let yy = 8; yy < 120; yy += 18) {
+        for (let xx = 8; xx < 56; xx += 18) {
+          // часть окон светится (ночью)
+          const glow = lit && Math.random() > 0.45;
+          g.fillStyle = glow ? '#ffdd88' : '#223040';
+          g.fillRect(xx, yy, 11, 12);
+        }
       }
-      // флажок-маркер города
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 30), new THREE.MeshStandardMaterial({ color: 0x333333 }));
-      pole.position.set(city.x, 15, city.z);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      return tex;
+    }
+    const winTexDay = makeWindowTexture(false);
+    const winTexNight = makeWindowTexture(true);
+
+    // Хранилища для динамики (окна меняются день/ночь)
+    const buildingMats: THREE.MeshStandardMaterial[] = [];
+    const streetLights: THREE.PointLight[] = [];
+    const lampGlows: THREE.Mesh[] = [];
+
+    // ===== Города: кварталы, тротуары, детальные здания =====
+    const flags: { name: string; mesh: THREE.Mesh; x: number; z: number }[] = [];
+    const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0xb0b0b0, roughness: 1 });
+    const plazaMat = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 1 });
+    const lampPostMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.7, metalness: 0.5 });
+
+    CITIES.forEach((city) => {
+      // центральная площадь города (асфальт)
+      const plaza = new THREE.Mesh(new THREE.CircleGeometry(60, 24), plazaMat);
+      plaza.rotation.x = -Math.PI / 2;
+      plaza.position.set(city.x, 0.15, city.z);
+      plaza.receiveShadow = true;
+      scene.add(plaza);
+
+      // здания по сетке кварталов 4x4 (реалистичная застройка)
+      const grid = 4;
+      const step = 26;
+      for (let gx = -grid / 2; gx < grid / 2; gx++) {
+        for (let gz = -grid / 2; gz < grid / 2; gz++) {
+          if (Math.random() > 0.82) continue; // пропуски — дворы
+          const bx = city.x + gx * step + step / 2 + (Math.random() - 0.5) * 4;
+          const bz = city.z + gz * step + step / 2 + (Math.random() - 0.5) * 4;
+          const floors = 1 + Math.floor(Math.random() * 8);
+          const w = 10 + Math.random() * 6;
+          const d = 10 + Math.random() * 6;
+          const hh = floors * 4;
+
+          // тротуар под зданием
+          const sw = new THREE.Mesh(new THREE.BoxGeometry(w + 6, 0.4, d + 6), sidewalkMat);
+          sw.position.set(bx, 0.2, bz);
+          sw.receiveShadow = true;
+          scene.add(sw);
+
+          // фасад с окнами (текстура)
+          const mat = new THREE.MeshStandardMaterial({ map: winTexDay.clone(), roughness: 0.85 });
+          mat.map!.repeat.set(2, floors);
+          buildingMats.push(mat);
+          const b = new THREE.Mesh(new THREE.BoxGeometry(w, hh, d), mat);
+          b.position.set(bx, hh / 2 + 0.4, bz);
+          b.castShadow = true;
+          b.receiveShadow = true;
+          scene.add(b);
+
+          // плоская крыша с парапетом
+          const roof = new THREE.Mesh(
+            new THREE.BoxGeometry(w + 1, 1, d + 1),
+            new THREE.MeshStandardMaterial({ color: 0x55585e, roughness: 1 })
+          );
+          roof.position.set(bx, hh + 0.9, bz);
+          scene.add(roof);
+
+          // вывеска на невысоких домах
+          if (floors <= 3 && Math.random() > 0.5) {
+            const sign = new THREE.Mesh(
+              new THREE.BoxGeometry(w * 0.7, 1.6, 0.3),
+              new THREE.MeshStandardMaterial({ color: [0xff5722, 0x2196f3, 0x4caf50, 0xffc107][Math.floor(Math.random() * 4)], emissive: 0x222222 })
+            );
+            sign.position.set(bx, 4.5, bz + d / 2 + 0.3);
+            scene.add(sign);
+          }
+        }
+      }
+
+      // уличные фонари по кругу площади
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const lx = city.x + Math.cos(a) * 50;
+        const lz = city.z + Math.sin(a) * 50;
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.4, 12), lampPostMat);
+        post.position.set(lx, 6, lz);
+        post.castShadow = true;
+        scene.add(post);
+        const lamp = new THREE.Mesh(
+          new THREE.SphereGeometry(0.9, 8, 8),
+          new THREE.MeshBasicMaterial({ color: 0xfff0c0 })
+        );
+        lamp.position.set(lx, 12, lz);
+        scene.add(lamp);
+        lampGlows.push(lamp);
+        const pl = new THREE.PointLight(0xffd28a, 0, 40);
+        pl.position.set(lx, 12, lz);
+        scene.add(pl);
+        streetLights.push(pl);
+      }
+
+      // флажок-маркер города (для квестов)
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 36), new THREE.MeshStandardMaterial({ color: 0x333333 }));
+      pole.position.set(city.x, 18, city.z);
       scene.add(pole);
       const flagMesh = new THREE.Mesh(
         new THREE.PlaneGeometry(10, 6),
-        new THREE.MeshStandardMaterial({ color: 0x999999, side: THREE.DoubleSide })
+        new THREE.MeshStandardMaterial({ color: 0x2ecc71, side: THREE.DoubleSide })
       );
-      flagMesh.position.set(city.x + 5, 27, city.z);
+      flagMesh.position.set(city.x + 5, 33, city.z);
       scene.add(flagMesh);
       flags.push({ name: city.name, mesh: flagMesh, x: city.x, z: city.z });
+    });
+
+    // ===== Трафик: машины ездят по трассе между городами =====
+    const roadSegments: { ax: number; az: number; bx: number; bz: number }[] = [
+      { ax: c('Малгобек').x, az: c('Малгобек').z, bx: c('Назрань').x, bz: c('Назрань').z },
+      { ax: c('Назрань').x, az: c('Назрань').z, bx: c('Магас').x, bz: c('Магас').z },
+      { ax: c('Магас').x, az: c('Магас').z, bx: c('Карабулак').x, bz: c('Карабулак').z },
+      { ax: c('Карабулак').x, az: c('Карабулак').z, bx: c('Чермен').x, bz: c('Чермен').z },
+      { ax: c('Чермен').x, az: c('Чермен').z, bx: c('Владикавказ').x, bz: c('Владикавказ').z },
+    ];
+    const trafficColors = [0xffffff, 0x222222, 0xcc2222, 0x2255cc, 0x999999, 0x115522];
+    const traffic: { mesh: THREE.Group; seg: number; t: number; dir: number; speed: number }[] = [];
+    for (let i = 0; i < 24; i++) {
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(4, 2, 8),
+        new THREE.MeshStandardMaterial({ color: trafficColors[i % trafficColors.length], roughness: 0.4, metalness: 0.5 })
+      );
+      body.position.y = 1.5; body.castShadow = true; g.add(body);
+      const cab = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.5, 4), new THREE.MeshStandardMaterial({ color: 0x1a2530, roughness: 0.2 }));
+      cab.position.set(0, 3, -0.5); g.add(cab);
+      scene.add(g);
+      traffic.push({
+        mesh: g,
+        seg: Math.floor(Math.random() * roadSegments.length),
+        t: Math.random(),
+        dir: Math.random() > 0.5 ? 1 : -1,
+        speed: 0.04 + Math.random() * 0.05,
+      });
+    }
+
+    // ===== Пешеходы: ходят по площадям городов =====
+    const peds: { mesh: THREE.Group; cx: number; cz: number; a: number; r: number; speed: number }[] = [];
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0xe0a87f });
+    const clothColors = [0x3366cc, 0xcc3333, 0x33aa55, 0xaa8844, 0x8844aa, 0x444444];
+    CITIES.forEach((city) => {
+      for (let i = 0; i < 6; i++) {
+        const p = new THREE.Group();
+        const torso = new THREE.Mesh(
+          new THREE.BoxGeometry(1.2, 2.2, 0.8),
+          new THREE.MeshStandardMaterial({ color: clothColors[Math.floor(Math.random() * clothColors.length)] })
+        );
+        torso.position.y = 2; torso.castShadow = true; p.add(torso);
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.6, 8, 8), skinMat);
+        head.position.y = 3.6; p.add(head);
+        scene.add(p);
+        peds.push({
+          mesh: p, cx: city.x, cz: city.z,
+          a: Math.random() * Math.PI * 2,
+          r: 40 + Math.random() * 15,
+          speed: 0.2 + Math.random() * 0.3,
+        });
+      }
     });
 
     // ===== Деревья =====
@@ -387,6 +526,49 @@ const Index = () => {
       const sky = skyNight.clone().lerp(skyDay, daylight);
       scene.background = sky;
       (scene.fog as THREE.Fog).color = sky;
+
+      // ----- ночное освещение: фонари и окна загораются -----
+      const isNight = daylight < 0.35;
+      const lampPower = isNight ? 1.6 : 0;
+      streetLights.forEach((l) => (l.intensity = lampPower));
+      lampGlows.forEach((g) => ((g.material as THREE.MeshBasicMaterial).color.setHex(isNight ? 0xffe7a8 : 0x666660)));
+      // переключаем текстуру окон (светятся ночью)
+      buildingMats.forEach((m) => {
+        const want = isNight ? winTexNight : winTexDay;
+        if (m.userData.lit !== isNight) {
+          const rep = m.map!.repeat.clone();
+          m.map = want.clone();
+          m.map.repeat.copy(rep);
+          m.needsUpdate = true;
+          m.userData.lit = isNight;
+        }
+      });
+
+      // ----- движение трафика по трассе -----
+      traffic.forEach((tr) => {
+        tr.t += tr.speed * tr.dir * dt;
+        if (tr.t > 1) { tr.t = 0; tr.seg = (tr.seg + 1) % roadSegments.length; }
+        if (tr.t < 0) { tr.t = 1; tr.seg = (tr.seg - 1 + roadSegments.length) % roadSegments.length; }
+        const s = roadSegments[tr.seg];
+        const px = s.ax + (s.bx - s.ax) * tr.t;
+        const pz = s.az + (s.bz - s.az) * tr.t;
+        // смещение в свою полосу
+        const ang = Math.atan2(s.bz - s.az, s.bx - s.ax);
+        const lane = 4 * tr.dir;
+        tr.mesh.position.set(px + Math.cos(ang + Math.PI / 2) * lane, 0, pz + Math.sin(ang + Math.PI / 2) * lane);
+        tr.mesh.rotation.y = -ang + (tr.dir < 0 ? Math.PI : 0) + Math.PI / 2;
+      });
+
+      // ----- движение пешеходов по площадям -----
+      peds.forEach((pd) => {
+        pd.a += pd.speed * dt;
+        const px = pd.cx + Math.cos(pd.a) * pd.r;
+        const pz = pd.cz + Math.sin(pd.a) * pd.r;
+        pd.mesh.position.set(px, 0, pz);
+        pd.mesh.rotation.y = -pd.a;
+        // покачивание при ходьбе
+        pd.mesh.position.y = Math.abs(Math.sin(pd.a * 12)) * 0.3;
+      });
 
       // ----- проверка достижения цели квеста -----
       const q = QUESTS.find((x) => x.id === stateRef.current.activeQuest);
